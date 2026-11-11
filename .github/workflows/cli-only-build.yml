@@ -23,7 +23,11 @@ permissions:
 
 jobs:
   build-cli:
-    runs-on: ubuntu-24.04
+    # Ubuntu 22.04 to match the target server's glibc (2.35). The default
+    # runner is 24.04, whose glibc 2.39 produces a binary that refuses to
+    # start on the server with:
+    #   /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.39' not found
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     env:
       RUSTFLAGS: -Awarnings
