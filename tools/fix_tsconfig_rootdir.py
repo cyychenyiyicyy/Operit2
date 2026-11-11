@@ -1,24 +1,30 @@
 #!/usr/bin/env python3
-"""Patch plugin tsconfig.json files that trip TypeScript error TS5011.
+"""Add an explicit rootDir to plugin tsconfig.json files that need one.
 
-TS5011: "The common source directory of 'tsconfig.json' is './src'. The
-'rootDir' setting must be explicitly set to this or another path to adjust
-your output's file layout."
+Why this exists
+---------------
+The CLI packaging step runs `tsc -p <package>/tsconfig.json` for every plugin
+package. A package whose `include` spans both its own sources and files
+outside its directory (e.g. `../../../types/**/*.d.ts`) while also setting
+`outDir` makes TypeScript complain:
 
-It is a config-level rule (not a type error) and it fires on plugin packages
-during `pnpm run check`, which the CLI packaging step runs before bundling.
+    error TS5011: The common source directory of 'tsconfig.json' is './src'.
+    The 'rootDir' setting must be explicitly set to this or another path to
+    adjust your output's file layout.
 
-Cause in this repo: a package whose `include` spans its own sources *and*
-`../../../types/**/*.d.ts` (files outside the package directory) while also
-setting `outDir`. TypeScript then cannot infer a single common source
-directory and requires an explicit `rootDir`.
+Setting rootDir explicitly satisfies the compiler without weakening any type
+checking.
 
-Fix: set `rootDir` to "." for affected configs that lack it. "." keeps the
-output layout under the package directory (dist/<relative path>), matching
-what `scripts/build.mjs` already expects, and does not weaken type checking.
+Choosing the value
+------------------
+The value must preserve the existing output layout, because some packages
+compile to `dist/<file>.js` and their build script reads that directory:
 
-Only files under plugins/packages/*/tsconfig.json are touched, and only when
-they are missing "rootDir".
+  * if the package's include patterns point at `src/...`, use rootDir "src"
+    (identical to what sibling packages already declare);
+  * otherwise use "." so output stays under the package directory.
+
+Packages that already declare rootDir are left untouched.
 """
 import json
 import pathlib
@@ -28,10 +34,22 @@ ROOT = pathlib.Path("plugins/packages")
 changed = []
 skipped = []
 
+
+def infer_root_dir(options, include):
+    """Pick a rootDir that keeps the current output layout."""
+    patterns = include if isinstance(include, list) else []
+    has_src = any(
+        isinstance(p, str) and p.replace("\\", "/").lstrip("./").startswith("src/")
+        for p in patterns
+    )
+    if has_src:
+        return "src"
+    return "."
+
+
 for tsconfig in sorted(ROOT.glob("*/tsconfig.json")):
     try:
-        raw = tsconfig.read_text(encoding="utf-8")
-        data = json.loads(raw)
+        data = json.loads(tsconfig.read_text(encoding="utf-8"))
     except Exception as error:
         skipped.append((str(tsconfig), f"unparsable: {error}"))
         continue
@@ -43,11 +61,12 @@ for tsconfig in sorted(ROOT.glob("*/tsconfig.json")):
     if "rootDir" in options:
         continue
 
-    options["rootDir"] = "."
+    include = data.get("include", [])
+    options["rootDir"] = infer_root_dir(options, include)
     tsconfig.write_text(
         json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
-    changed.append(str(tsconfig))
+    changed.append(f"{tsconfig} -> rootDir={options['rootDir']}")
 
 print(f"patched {len(changed)} tsconfig file(s):")
 for item in changed:
