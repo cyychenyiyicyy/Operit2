@@ -43,6 +43,16 @@ jobs:
         with:
           node-version: 24
 
+      - name: Install Python 3.12
+        # tools/build_scripts/release_artifacts.py (imported transitively by
+        # cli_common.py) does `import tomllib`, which only exists in Python
+        # 3.11+. Ubuntu 22.04 ships Python 3.10, so the script dies with
+        # "ModuleNotFoundError: No module named 'tomllib'".
+        # We stay on 22.04 for the glibc match and provide 3.12 explicitly.
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Enable pnpm via corepack
         # plugins/packages/*/package.json pins "packageManager": "pnpm@10.7.0",
         # and sync_plugin_packages.py shells out to `corepack pnpm`.
