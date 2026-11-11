@@ -61,16 +61,19 @@ jobs:
           tsc --version
           which tsc
 
-      - name: Install Rust (with musl target)
+      - name: Install Rust
+        # Build for the HOST target (x86_64-unknown-linux-gnu) instead of
+        # x86_64-unknown-linux-musl: the musl cross build needs a musl C++
+        # compiler (musl-g++), which Ubuntu's `musl-tools` package does not
+        # ship, and the target server is Ubuntu 22.04 (glibc) anyway.
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
-          targets: x86_64-unknown-linux-musl
 
-      - name: Install musl build tools
+      - name: Install build tools
         run: |
           sudo apt-get update -qq || true
-          sudo apt-get install -y --no-install-recommends musl-tools pkg-config || true
+          sudo apt-get install -y --no-install-recommends pkg-config build-essential || true
 
       - name: Patch plugin tsconfigs (TS5011)
         # `pnpm run check` in the plugin packages fails with TypeScript TS5011
@@ -82,7 +85,7 @@ jobs:
 
       - name: Build and package Linux CLI
         run: |
-          python3 tools/build_scripts/build_cli_linux.py --arches x86_64
+          python3 tools/build_scripts/build_cli_linux.py --arches host
 
       - name: Upload Linux CLI artifact
         uses: actions/upload-artifact@v4
