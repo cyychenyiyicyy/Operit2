@@ -94,3 +94,21 @@ jobs:
           path: tools/release/dist/operit2-cli-linux-x86_64-*.tar.gz
           if-no-files-found: error
           retention-days: 7
+
+      - name: Publish as a release asset
+        # Release assets are served from release-assets.githubusercontent.com,
+        # which supports parallel HTTP Range requests. The Actions artifact
+        # endpoint streams at ~90 KB/s here and its signed blob URL rejects
+        # unauthenticated range requests, so publishing a release makes the
+        # 90+ MB tarball fetchable in seconds.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="cli-linux-v21-$(date +%Y%m%d-%H%M%S)"
+          gh release create "$TAG" \
+            tools/release/dist/operit2-cli-linux-x86_64-*.tar.gz \
+            --title "Operit2 Linux CLI (peer protocol v21, built from main)" \
+            --notes "Built from $(git rev-parse HEAD) on main. Peer protocol version 21. Built by cli-only-build.yml (lean Rust-only build; the stock Linux workflow fails in this environment on apt mirror errors)."
+          echo "TAG=$TAG"
+          gh release view "$TAG" --json assets --jq '.assets[] | "\(.name) \(.size) \(.url)"'
