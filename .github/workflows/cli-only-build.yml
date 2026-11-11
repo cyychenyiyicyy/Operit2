@@ -1,0 +1,58 @@
+name: Linux CLI Only Build
+
+# Lean replacement for .github/workflows/linux-release-build.yml:
+# builds ONLY the Rust CLI for x86_64-unknown-linux-musl, skipping the Flutter
+# SDK, Dart, FVM and the GTK/WebKit system packages that the app build needs.
+# (The stock workflow's apt step failed in this environment: the Ubuntu noble
+# mirror returned 404s for libsoup-3.0 and DNS failures for azure.archive.)
+#
+# It also reuses the repository's own packaging script so the produced
+# tarball has the same layout as the official releases (operit2 + install.sh +
+# uninstall.sh + README.txt).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref_to_build:
+        description: "Commit/ref to build"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+
+jobs:
+  build-cli:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      RUSTFLAGS: -Awarnings
+      RUST_TOOLCHAIN_VERSION: 1.95.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref_to_build }}
+
+      - name: Install Rust (with musl target)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl build tools
+        run: |
+          sudo apt-get update -qq || true
+          sudo apt-get install -y --no-install-recommends musl-tools pkg-config || true
+
+      - name: Build and package Linux CLI
+        run: |
+          python3 tools/build_scripts/build_cli_linux.py --arches x86_64
+
+      - name: Upload Linux CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: operit2-cli-linux-x86_64
+          path: tools/release/dist/operit2-cli-linux-x86_64-*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
