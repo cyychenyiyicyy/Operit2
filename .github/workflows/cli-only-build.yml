@@ -34,6 +34,19 @@ jobs:
         with:
           ref: ${{ inputs.ref_to_build }}
 
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable pnpm via corepack
+        # plugins/packages/*/package.json pins "packageManager": "pnpm@10.7.0",
+        # and sync_plugin_packages.py shells out to `corepack pnpm`.
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.7.0 --activate
+          pnpm --version
+
       - name: Install Rust (with musl target)
         uses: dtolnay/rust-toolchain@master
         with:
