@@ -58,6 +58,14 @@ jobs:
           sudo apt-get update -qq || true
           sudo apt-get install -y --no-install-recommends musl-tools pkg-config || true
 
+      - name: Patch plugin tsconfigs (TS5011)
+        # `pnpm run check` in the plugin packages fails with TypeScript TS5011
+        # ("The common source directory of 'tsconfig.json' is './src'. The
+        # 'rootDir' setting must be explicitly set...") for packages whose
+        # include spans ../../../types. Set an explicit rootDir so the CLI
+        # packaging step can run. No type checking is weakened.
+        run: python3 tools/fix_tsconfig_rootdir.py
+
       - name: Build and package Linux CLI
         run: |
           python3 tools/build_scripts/build_cli_linux.py --arches x86_64
