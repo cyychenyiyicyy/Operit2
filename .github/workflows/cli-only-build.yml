@@ -47,6 +47,20 @@ jobs:
           corepack prepare pnpm@10.7.0 --activate
           pnpm --version
 
+      - name: Pin TypeScript 5.9.2
+        # The GitHub runner image ships a global TypeScript 6.x at
+        # /usr/local/bin/tsc. The plugin packages are written for TS 5.9.2
+        # (their own package.json pins "typescript": "5.9.2"), and TS 6
+        # rejects their configs outright:
+        #   error TS5108: Option 'alwaysStrict=false' has been removed.
+        #   error TS5108: Option 'moduleResolution=node10' has been removed.
+        # Install the pinned compiler globally so `tsc` on PATH is 5.9.2
+        # instead of the runner's 6.x.
+        run: |
+          npm install -g typescript@5.9.2
+          tsc --version
+          which tsc
+
       - name: Install Rust (with musl target)
         uses: dtolnay/rust-toolchain@master
         with:
