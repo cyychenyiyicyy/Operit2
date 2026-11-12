@@ -1,0 +1,128 @@
+name: Linux CLI Only Build
+
+# Lean replacement for .github/workflows/linux-release-build.yml:
+# builds ONLY the Rust CLI for x86_64-unknown-linux-musl, skipping the Flutter
+# SDK, Dart, FVM and the GTK/WebKit system packages that the app build needs.
+# (The stock workflow's apt step failed in this environment: the Ubuntu noble
+# mirror returned 404s for libsoup-3.0 and DNS failures for azure.archive.)
+#
+# It also reuses the repository's own packaging script so the produced
+# tarball has the same layout as the official releases (operit2 + install.sh +
+# uninstall.sh + README.txt).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref_to_build:
+        description: "Commit/ref to build"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+
+jobs:
+  build-cli:
+    # Ubuntu 22.04 to match the target server's glibc (2.35). The default
+    # runner is 24.04, whose glibc 2.39 produces a binary that refuses to
+    # start on the server with:
+    #   /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.39' not found
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      RUSTFLAGS: -Awarnings
+      RUST_TOOLCHAIN_VERSION: 1.95.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref_to_build }}
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install Python 3.12
+        # tools/build_scripts/release_artifacts.py (imported transitively by
+        # cli_common.py) does `import tomllib`, which only exists in Python
+        # 3.11+. Ubuntu 22.04 ships Python 3.10, so the script dies with
+        # "ModuleNotFoundError: No module named 'tomllib'".
+        # We stay on 22.04 for the glibc match and provide 3.12 explicitly.
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Enable pnpm via corepack
+        # plugins/packages/*/package.json pins "packageManager": "pnpm@10.7.0",
+        # and sync_plugin_packages.py shells out to `corepack pnpm`.
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.7.0 --activate
+          pnpm --version
+
+      - name: Pin TypeScript 5.9.2
+        # The GitHub runner image ships a global TypeScript 6.x at
+        # /usr/local/bin/tsc. The plugin packages are written for TS 5.9.2
+        # (their own package.json pins "typescript": "5.9.2"), and TS 6
+        # rejects their configs outright:
+        #   error TS5108: Option 'alwaysStrict=false' has been removed.
+        #   error TS5108: Option 'moduleResolution=node10' has been removed.
+        # Install the pinned compiler globally so `tsc` on PATH is 5.9.2
+        # instead of the runner's 6.x.
+        run: |
+          npm install -g typescript@5.9.2
+          tsc --version
+          which tsc
+
+      - name: Install Rust
+        # Build for the HOST target (x86_64-unknown-linux-gnu) instead of
+        # x86_64-unknown-linux-musl: the musl cross build needs a musl C++
+        # compiler (musl-g++), which Ubuntu's `musl-tools` package does not
+        # ship, and the target server is Ubuntu 22.04 (glibc) anyway.
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq || true
+          sudo apt-get install -y --no-install-recommends pkg-config build-essential || true
+
+      - name: Patch plugin tsconfigs (TS5011)
+        # `pnpm run check` in the plugin packages fails with TypeScript TS5011
+        # ("The common source directory of 'tsconfig.json' is './src'. The
+        # 'rootDir' setting must be explicitly set...") for packages whose
+        # include spans ../../../types. Set an explicit rootDir so the CLI
+        # packaging step can run. No type checking is weakened.
+        run: python3 tools/fix_tsconfig_rootdir.py
+
+      - name: Build and package Linux CLI
+        run: |
+          python3 tools/build_scripts/build_cli_linux.py --arches host
+
+      - name: Upload Linux CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: operit2-cli-linux-x86_64
+          path: tools/release/dist/operit2-cli-linux-x86_64-*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Publish as a release asset
+        # Release assets are served from release-assets.githubusercontent.com,
+        # which supports parallel HTTP Range requests. The Actions artifact
+        # endpoint streams at ~90 KB/s here and its signed blob URL rejects
+        # unauthenticated range requests, so publishing a release makes the
+        # 90+ MB tarball fetchable in seconds.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="cli-linux-v21-$(date +%Y%m%d-%H%M%S)"
+          gh release create "$TAG" \
+            tools/release/dist/operit2-cli-linux-x86_64-*.tar.gz \
+            --title "Operit2 Linux CLI (peer protocol v21, built from main)" \
+            --notes "Built from $(git rev-parse HEAD) on main. Peer protocol version 21. Built by cli-only-build.yml (lean Rust-only build; the stock Linux workflow fails in this environment on apt mirror errors)."
+          echo "TAG=$TAG"
+          gh release view "$TAG" --json assets --jq '.assets[] | "\(.name) \(.size) \(.url)"'
